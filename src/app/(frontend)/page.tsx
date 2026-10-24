@@ -227,7 +227,14 @@ export default function HomePage() {
   const [saved, setSaved] = useState(false)
   const [purchaserLinked, setPurchaserLinked] = useState(false)
   const [leadLinked, setLeadLinked] = useState(false)
+  const [linkPage, setLinkPage] = useState<'record' | 'orders' | 'leads'>('record')
+  const [leadRole, setLeadRole] = useState<'sender' | 'receiver' | ''>('')
   const [quality, setQuality] = useState<QualityAnswers>(emptyQualityAnswers)
+  const [qualityInstructions, setQualityInstructions] = useState('')
+  const [suggestedFormat, setSuggestedFormat] = useState('')
+  const [transcript, setTranscript] = useState('')
+  const [qualityWarnings, setQualityWarnings] = useState<string[]>([])
+  const [instructionsLoading, setInstructionsLoading] = useState(true)
 
   const tr = (zh: string, en: string) => (language === 'zh' ? zh : en)
   const filterLabel = (filter: LinkFilter) =>
@@ -272,9 +279,35 @@ export default function HomePage() {
 
   const missingQualityFields = requiredQualityFields.filter(({ field }) => !quality[field])
   const qualityPassed = missingQualityFields.length === 0
+  const transcriptPassed = transcript.trim().length > 0 && qualityWarnings.length === 0
 
   useEffect(() => {
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en'
+  }, [language])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setInstructionsLoading(true)
+    fetch(`/api/globals/service-quality-settings?locale=${language}&fallback-locale=en`, {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Unable to load quality instructions')
+        return response.json() as Promise<{ instructions?: string; suggestedFormat?: string }>
+      })
+      .then((settings) => {
+        setQualityInstructions(settings.instructions ?? '')
+        setSuggestedFormat(settings.suggestedFormat ?? '')
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name !== 'AbortError') {
+          setQualityInstructions('')
+          setSuggestedFormat('')
+        }
+      })
+      .finally(() => setInstructionsLoading(false))
+
+    return () => controller.abort()
   }, [language])
 
   const filteredRecords = useMemo(
@@ -301,7 +334,11 @@ export default function HomePage() {
     setTranscribed(false)
     setPurchaserLinked(false)
     setLeadLinked(false)
+    setLinkPage('record')
+    setLeadRole('')
     setQuality(emptyQualityAnswers)
+    setTranscript('')
+    setQualityWarnings([])
     setPanelOpen(true)
   }
 
@@ -316,24 +353,42 @@ export default function HomePage() {
       setTranscribed(true)
       setPurchaserLinked(true)
       setLeadLinked(true)
-      setQuality({
-        visitorCount: '2',
-        gender: 'mixed',
-        ageRange: '25-34',
-        appearance: 'smart-casual',
-        heardFrom: 'social',
-        shoppingOccasion: 'gift',
-        triedOtherBrands: 'yes',
-        hasBudget: 'yes',
-        budgetRange: '30000-50000',
-        payerDecision: 'split',
-        preferences: 'rings',
-        concerns: 'brand-comparison',
-      })
+      setLeadRole('sender')
+      setTranscript(
+        tr(
+          '今天一男一女两位顾客到店，穿着商务休闲。丈夫买单，两人共同决策。朋友推荐认识 DR，为周年纪念挑选礼物。喜欢经典系列戒指，试戴了三款，预算三至五万元。顾客担心交期，约定周五发送现货和款式信息。',
+          'Two visitors, one man and one woman, came in today wearing smart casual clothing. The husband will pay and both will decide. They heard about DR from a friend and are shopping for an anniversary gift. They liked the Classic rings, tried three styles, and have a ¥30–50k budget. They are concerned about delivery time, and we agreed to send styles and stock information on Friday.',
+        ),
+      )
+      setQualityWarnings([
+        tr('缺少：顾客年龄信息', 'Missing: visitor age'),
+        tr('缺少：是否对比或试过其他品牌', 'Missing: whether they compared or tried other brands'),
+      ])
     } else {
       setTranscribed(false)
+      setQualityWarnings([])
       setRecording(true)
     }
+  }
+
+  const runQualityCheck = () => {
+    const value = transcript.toLowerCase()
+    if (!value.trim()) {
+      setQualityWarnings([tr('缺少：语音转写内容', 'Missing: transcript')])
+      return
+    }
+
+    const warnings: string[] = []
+    if (!/(\d{2}\s*岁|\d{2}\s*[–-]\s*\d{2}|age|aged)/i.test(value)) warnings.push(tr('缺少：顾客年龄信息', 'Missing: visitor age'))
+    if (!/(穿着|着装|外观|clothing|wearing|appearance|casual)/i.test(value)) warnings.push(tr('缺少：外观与穿着', 'Missing: appearance and clothing'))
+    if ((purchaserLinked || leadLinked) && !/(婚|纪念|送礼|自用|occasion|gift|anniversary|wedding)/i.test(value)) {
+      warnings.push(tr('缺少：购物场景', 'Missing: shopping occasion'))
+    }
+    if (purchaserLinked && !/(其他品牌|对比|试过.*品牌|other brand|compared)/i.test(value)) {
+      warnings.push(tr('缺少：是否对比或试过其他品牌', 'Missing: whether they compared or tried other brands'))
+    }
+    if (leadLinked && !/(预算|budget)/i.test(value)) warnings.push(tr('缺少：是否有预算', 'Missing: whether they have a budget'))
+    setQualityWarnings(warnings)
   }
 
   return (
@@ -622,7 +677,7 @@ export default function HomePage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="record-panel-title"
-            className="flex h-full w-full max-w-[600px] animate-[slideIn_.24s_ease-out] flex-col bg-white shadow-[-20px_0_60px_rgba(15,23,42,0.14)]"
+            className="relative flex h-full w-full max-w-[600px] animate-[slideIn_.24s_ease-out] flex-col overflow-hidden bg-white shadow-[-20px_0_60px_rgba(15,23,42,0.14)]"
             onMouseDown={(event) => event.stopPropagation()}
           >
             {saved ? (
@@ -718,6 +773,68 @@ export default function HomePage() {
                   </div>
 
                   <section>
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-700">{tr('关联记录', 'Linked records')}</h3>
+                        <p className="mt-1 text-[11px] text-slate-400">{tr('按需要关联订单和潜客，可同时关联。', 'Link an order, a lead, or both as needed.')}</p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">{tr('选填', 'Optional')}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setLinkPage('orders')}
+                        className={`flex h-12 items-center justify-center gap-2 rounded-xl border text-xs font-bold transition ${
+                          purchaserLinked
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50/50'
+                        }`}
+                      >
+                        <Icon className="size-4">
+                          {purchaserLinked ? <path d="m5 12 4 4L19 6" /> : <><path d="M6 7h12l-1 13H7L6 7Z" /><path d="M9 9V6a3 3 0 0 1 6 0v3" /></>}
+                        </Icon>
+                        {purchaserLinked ? tr('已关联订单', 'Order linked') : tr('关联订单', 'Link Order')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLinkPage('leads')}
+                        className={`flex h-12 items-center justify-center gap-2 rounded-xl border text-xs font-bold transition ${
+                          leadLinked
+                            ? 'border-amber-300 bg-amber-50 text-amber-700'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-amber-300 hover:bg-amber-50/50'
+                        }`}
+                      >
+                        <Icon className="size-4">
+                          {leadLinked ? <path d="m5 12 4 4L19 6" /> : <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8Z" />}
+                        </Icon>
+                        {leadLinked ? tr('已关联潜客', 'Lead linked') : tr('关联潜客', 'Link Leads')}
+                      </button>
+                    </div>
+                    {(purchaserLinked || leadLinked) && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {purchaserLinked && (
+                          <span className="flex max-w-full items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-700">
+                            <span className="truncate">{tr('订单 O-20886 · Noah', 'Order O-20886 · Noah')}</span>
+                            <button onClick={() => setPurchaserLinked(false)} aria-label={tr('移除订单关联', 'Remove order link')} className="text-emerald-500 hover:text-emerald-800">
+                              <Icon className="size-3"><path d="M18 6 6 18M6 6l12 12" /></Icon>
+                            </button>
+                          </span>
+                        )}
+                        {leadLinked && (
+                          <span className="flex max-w-full items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-700">
+                            <span className="truncate">
+                              {tr('潜客 Ella', 'Lead Ella')} · {leadRole === 'receiver' ? tr('收礼人', 'Gift receiver') : tr('送礼人', 'Gift sender')}
+                            </span>
+                            <button onClick={() => { setLeadLinked(false); setLeadRole('') }} aria-label={tr('移除潜客关联', 'Remove lead link')} className="text-amber-500 hover:text-amber-800">
+                              <Icon className="size-3"><path d="M18 6 6 18M6 6l12 12" /></Icon>
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="hidden">
                     <div className="mb-3 flex items-end justify-between gap-4">
                       <div>
                         <h3 className="text-xs font-bold text-slate-700">{tr('关联人员', 'Link people')}</h3>
@@ -813,6 +930,89 @@ export default function HomePage() {
                   </section>
 
                   <section className="mt-7 border-t border-slate-100 pt-6">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-800">{tr('服务质量检查', 'Service quality check')}</h3>
+                        <p className="mt-1 text-[11px] text-slate-400">{tr('检查标准由管理员维护，无需重新发布应用。', 'Instructions are admin-managed and update without republishing.')}</p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-violet-50 px-2.5 py-1 text-[10px] font-bold text-violet-700">{tr('实时规则', 'Live rules')}</span>
+                    </div>
+
+                    <div className="overflow-hidden rounded-2xl border border-violet-200 bg-violet-50/30">
+                      <div className="flex items-center gap-2 border-b border-violet-100 bg-white/70 px-4 py-3">
+                        <span className="grid size-7 place-items-center rounded-lg bg-violet-100 text-violet-700">
+                          <Icon className="size-4"><path d="M8 3h8l3 3v15H5V3h3Z" /><path d="M9 11h6M9 15h6M9 7h3" /></Icon>
+                        </span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800">{tr('填写说明', 'Instructions')}</p>
+                          <p className="text-[10px] text-slate-400">{tr('在 Payload Admin 中可随时更新', 'Editable anytime in Payload Admin')}</p>
+                        </div>
+                      </div>
+                      <div className="px-4 py-4">
+                        {instructionsLoading ? (
+                          <div className="space-y-2">
+                            <div className="h-3 w-full animate-pulse rounded bg-violet-100" />
+                            <div className="h-3 w-5/6 animate-pulse rounded bg-violet-100" />
+                            <div className="h-3 w-4/6 animate-pulse rounded bg-violet-100" />
+                          </div>
+                        ) : qualityInstructions ? (
+                          <>
+                            <p className="whitespace-pre-line text-[11px] leading-5 text-slate-600">{qualityInstructions}</p>
+                            {suggestedFormat && (
+                              <div className="mt-4 rounded-xl border border-violet-100 bg-white px-3 py-3">
+                                <p className="whitespace-pre-line text-[10px] leading-5 text-slate-500">{suggestedFormat}</p>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-red-600">{tr('暂时无法加载质量检查说明，请稍后重试。', 'Unable to load quality instructions. Please try again.')}</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <div className="mb-2 flex items-center justify-between">
+                        <label className="text-xs font-bold text-slate-700">{tr('语音转写内容', 'Voice transcript')}</label>
+                        {transcribed && <span className="text-[10px] font-bold text-emerald-600">{tr('已完成转写', 'Transcribed')}</span>}
+                      </div>
+                      <textarea
+                        value={transcript}
+                        onChange={(event) => setTranscript(event.target.value)}
+                        rows={8}
+                        placeholder={tr('提交语音备忘后，转写文字会显示在这里。也可以直接编辑。', 'The voice memo transcript will appear here. You can also edit it directly.')}
+                        className="w-full resize-none rounded-xl border border-slate-200 p-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
+                      />
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={runQualityCheck}
+                          className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-50"
+                        >
+                          <Icon className="size-3.5"><path d="m5 12 4 4L19 6" /></Icon>
+                          {tr('重新检查', 'Check again')}
+                        </button>
+                      </div>
+                    </div>
+
+                    {qualityWarnings.length > 0 ? (
+                      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                        <div className="flex items-center gap-2 text-amber-800">
+                          <Icon className="size-4"><path d="M12 3 2 21h20L12 3Z" /><path d="M12 9v5M12 18h.01" /></Icon>
+                          <p className="text-xs font-bold">{tr('还需要补充以下信息', 'More information is needed')}</p>
+                        </div>
+                        <ul className="mt-2 space-y-1.5 pl-6 text-[11px] leading-5 text-amber-800">
+                          {qualityWarnings.map((warning) => <li key={warning} className="list-disc">{warning}</li>)}
+                        </ul>
+                      </div>
+                    ) : transcript.trim() ? (
+                      <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-700">
+                        <Icon className="size-4"><path d="m5 12 4 4L19 6" /></Icon>
+                        <p className="text-xs font-bold">{tr('未发现缺失信息', 'No missing information found')}</p>
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <section className="hidden">
                     <div className="mb-5 flex items-start justify-between gap-4">
                       <div>
                         <div className="flex items-center gap-2">
@@ -1023,7 +1223,7 @@ export default function HomePage() {
                 </div>
 
                 <div className="border-t border-slate-100 bg-white px-6 py-4">
-                  {!qualityPassed && (
+                  {!transcriptPassed && (
                     <div className="mb-3 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2.5 text-[10px] leading-4 text-red-700">
                       <Icon className="mt-0.5 size-3.5 shrink-0">
                         <circle cx="12" cy="12" r="9" />
@@ -1031,7 +1231,9 @@ export default function HomePage() {
                       </Icon>
                       <span>
                         <strong>{tr('暂不能提交：', 'Cannot submit yet: ')}</strong>
-                        {tr('请补充', 'Add')} {missingQualityFields.map(({ label }) => label).join(tr('、', ', '))}
+                        {transcript.trim()
+                          ? tr(`请处理 ${qualityWarnings.length} 条缺失信息提醒`, `Resolve ${qualityWarnings.length} missing-information warning(s)`)
+                          : tr('请先提交语音备忘或填写转写内容', 'Submit a voice memo or enter the transcript first')}
                       </span>
                     </div>
                   )}
@@ -1042,19 +1244,152 @@ export default function HomePage() {
                     <div className="flex items-center gap-3">
                       <span className="hidden text-[11px] text-slate-400 sm:block">{tr('草稿会自动保存', 'Draft saves automatically')}</span>
                       <button
-                        onClick={() => qualityPassed && setSaved(true)}
-                        disabled={!qualityPassed}
+                        onClick={() => transcriptPassed && setSaved(true)}
+                        disabled={!transcriptPassed}
                         className={`h-11 rounded-xl px-5 text-sm font-bold text-white transition ${
-                          qualityPassed
+                          transcriptPassed
                             ? 'bg-[#18191d] hover:bg-black active:scale-[0.98]'
                             : 'cursor-not-allowed bg-slate-300'
                         }`}
                       >
-                        {qualityPassed ? tr('提交服务记录', 'Submit service record') : tr('完成质量检查后提交', 'Complete quality check')}
+                        {transcriptPassed ? tr('提交服务记录', 'Submit service record') : tr('完成质量检查后提交', 'Complete quality check')}
                       </button>
                     </div>
                   </div>
                 </div>
+
+                {linkPage !== 'record' && (
+                  <div className="absolute inset-0 z-30 flex flex-col bg-[#f7f7f9]">
+                    <div className="flex h-[76px] shrink-0 items-center gap-3 border-b border-slate-100 bg-white px-5">
+                      <button
+                        onClick={() => setLinkPage('record')}
+                        aria-label={tr('返回服务记录', 'Back to service record')}
+                        className="grid size-9 place-items-center rounded-full text-slate-500 hover:bg-slate-100"
+                      >
+                        <Icon><path d="m15 18-6-6 6-6" /></Icon>
+                      </button>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-violet-600">{tr('关联记录', 'Link record')}</p>
+                        <h2 className="mt-0.5 text-lg font-bold tracking-tight">
+                          {linkPage === 'orders' ? tr('选择订单', 'Select an order') : tr('选择潜客', 'Select a lead')}
+                        </h2>
+                      </div>
+                      <button
+                        onClick={closePanel}
+                        aria-label={tr('关闭面板', 'Close panel')}
+                        className="ml-auto grid size-9 place-items-center rounded-full text-slate-400 hover:bg-slate-100"
+                      >
+                        <Icon><path d="M18 6 6 18M6 6l12 12" /></Icon>
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-5">
+                      {linkPage === 'leads' && (
+                        <div className="mb-5 rounded-2xl border border-amber-200 bg-white p-4">
+                          <p className="text-xs font-bold text-slate-800">
+                            {tr('这位潜客是送礼人还是收礼人？', 'Is this lead the gift sender or receiver?')}
+                            <span className="ml-1 text-red-500">*</span>
+                          </p>
+                          <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                            {tr('请选择角色后再关联潜客。', 'Choose a role before linking a lead.')}
+                          </p>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setLeadRole('sender')}
+                              className={`rounded-xl border px-3 py-3 text-left transition ${
+                                leadRole === 'sender'
+                                  ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-100'
+                                  : 'border-slate-200 hover:border-amber-300'
+                              }`}
+                            >
+                              <span className="block text-xs font-bold text-slate-800">{tr('送礼人', 'Gift sender')}</span>
+                              <span className="mt-1 block text-[10px] text-slate-400">{tr('购买并赠送礼物的人', 'The person buying the gift')}</span>
+                            </button>
+                            <button
+                              onClick={() => setLeadRole('receiver')}
+                              className={`rounded-xl border px-3 py-3 text-left transition ${
+                                leadRole === 'receiver'
+                                  ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-100'
+                                  : 'border-slate-200 hover:border-amber-300'
+                              }`}
+                            >
+                              <span className="block text-xs font-bold text-slate-800">{tr('收礼人', 'Gift receiver')}</span>
+                              <span className="mt-1 block text-[10px] text-slate-400">{tr('最终收到和使用礼物的人', 'The person receiving the gift')}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="relative mb-4">
+                        <span className="absolute inset-y-0 left-3 flex items-center text-slate-400">
+                          <Icon className="size-4"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></Icon>
+                        </span>
+                        <input
+                          placeholder={
+                            linkPage === 'orders'
+                              ? tr('搜索订单号、姓名或电话', 'Search order, name or phone')
+                              : tr('搜索姓名、电话或微信', 'Search name, phone or WeChat')
+                          }
+                          className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-sm outline-none placeholder:text-slate-400 focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
+                        />
+                      </div>
+
+                      <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">
+                        {linkPage === 'orders' ? tr('可关联订单', 'Available orders') : tr('可关联潜客', 'Available leads')}
+                      </p>
+
+                      <div className="space-y-2">
+                        {linkPage === 'orders'
+                          ? [
+                              [tr('O-20886 · Noah', 'O-20886 · Noah'), tr('Mini Arc 手袋 · 今天 11:36', 'Mini Arc bag · Today 11:36'), '¥32,800'],
+                              [tr('O-20841 · 林思妍', 'O-20841 · Sophia Lin'), tr('经典系列戒指 · 昨天 16:20', 'Classic ring · Yesterday 16:20'), '¥18,600'],
+                              [tr('O-20793 · 陈明宇', 'O-20793 · Marcus Chen'), tr('Horizon 公文包 · 5月14日', 'Horizon briefcase · May 14'), '¥26,500'],
+                            ].map(([title, detail, amount]) => (
+                              <button
+                                key={title}
+                                onClick={() => { setPurchaserLinked(true); setLinkPage('record') }}
+                                className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-emerald-300 hover:shadow-sm"
+                              >
+                                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+                                  <Icon><path d="M6 7h12l-1 13H7L6 7Z" /><path d="M9 9V6a3 3 0 0 1 6 0v3" /></Icon>
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-xs font-bold text-slate-800">{title}</span>
+                                  <span className="mt-1 block truncate text-[10px] text-slate-400">{detail}</span>
+                                </span>
+                                <span className="text-xs font-bold text-slate-600">{amount}</span>
+                                <Icon className="size-4 text-slate-300"><path d="m9 18 6-6-6-6" /></Icon>
+                              </button>
+                            ))
+                          : [
+                              [tr('Ella 周', 'Ella Zhou'), tr('微信 ella_zhou · 今天更新', 'WeChat ella_zhou · Updated today')],
+                              [tr('吴子轩', 'Daniel Wu'), tr('电话 138••••2148 · 高意向', 'Phone 138••••2148 · High intent')],
+                              [tr('李安琪', 'Angel Li'), tr('微信 angel_li90 · 到店两次', 'WeChat angel_li90 · 2 visits')],
+                            ].map(([title, detail]) => (
+                              <button
+                                key={title}
+                                disabled={!leadRole}
+                                onClick={() => { if (leadRole) { setLeadLinked(true); setLinkPage('record') } }}
+                                className={`flex w-full items-center gap-3 rounded-xl border bg-white p-4 text-left transition ${
+                                  leadRole
+                                    ? 'border-slate-200 hover:border-amber-300 hover:shadow-sm'
+                                    : 'cursor-not-allowed border-slate-100 opacity-50'
+                                }`}
+                              >
+                                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-amber-50 text-amber-600">
+                                  <Icon><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8Z" /></Icon>
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-xs font-bold text-slate-800">{title}</span>
+                                  <span className="mt-1 block truncate text-[10px] text-slate-400">{detail}</span>
+                                </span>
+                                <Icon className="size-4 text-slate-300"><path d="m9 18 6-6-6-6" /></Icon>
+                              </button>
+                            ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </aside>

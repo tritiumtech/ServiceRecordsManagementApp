@@ -133,10 +133,14 @@ export interface Config {
   db: {
     defaultIDType: string;
   };
-  fallbackLocale: ('false' | 'none' | 'null') | false | null | 'en' | 'en'[];
-  globals: {};
-  globalsSelect: {};
-  locale: 'en';
+  fallbackLocale: ('false' | 'none' | 'null') | false | null | ('zh' | 'en') | ('zh' | 'en')[];
+  globals: {
+    'service-quality-settings': ServiceQualitySetting;
+  };
+  globalsSelect: {
+    'service-quality-settings': ServiceQualitySettingsSelect<false> | ServiceQualitySettingsSelect<true>;
+  };
+  locale: 'zh' | 'en';
   widgets: {
     welcome: WelcomeWidget;
     collections: CollectionsWidget;
@@ -547,6 +551,44 @@ export interface PayloadLlmInstructionsSelect<T extends boolean = true> {
   updatedBy?: T;
   updatedAt?: T;
   createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "service-quality-settings".
+ */
+export interface ServiceQualitySetting {
+  id: string;
+  /**
+   * Mandatory information the service memo must include. The quality checker uses this text directly.
+   */
+  instructions: string;
+  /**
+   * A concise suggested structure shown beneath the instructions.
+   */
+  suggestedFormat: string;
+  createdBy?: {
+    relationTo: 'admins';
+    value: string | Admin;
+  } | null;
+  updatedBy?: {
+    relationTo: 'admins';
+    value: string | Admin;
+  } | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "service-quality-settings_select".
+ */
+export interface ServiceQualitySettingsSelect<T extends boolean = true> {
+  instructions?: T;
+  suggestedFormat?: T;
+  createdBy?: T;
+  updatedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
